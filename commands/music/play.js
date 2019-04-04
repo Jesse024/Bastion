@@ -23,10 +23,6 @@ exports.exec = async (Bastion, message, args) => {
 
 
     if (!args.song && !args.playlist) {
-      /**
-       * The command was ran with invalid parameters.
-       * @fires commandUsage
-       */
       return Bastion.emit('commandUsage', message, this.help);
     }
 
@@ -123,7 +119,7 @@ exports.exec = async (Bastion, message, args) => {
         message.guild.music.songs.push(song);
       }
 
-      message.channel.send({
+      await message.channel.send({
         embed: {
           color: Bastion.colors.GREEN,
           description: `Added ${songs.length} songs to the queue from your playlist.`
@@ -175,7 +171,7 @@ exports.exec = async (Bastion, message, args) => {
           });
         });
 
-        message.channel.send({
+        await message.channel.send({
           embed: {
             color: Bastion.colors.GREEN,
             description: `Added ${songInfo.length} songs to the queue from the YouTube playlist.`
@@ -194,7 +190,7 @@ exports.exec = async (Bastion, message, args) => {
           requester: message.author.tag
         });
 
-        textChannel.send({
+        await textChannel.send({
           embed: {
             color: Bastion.colors.GREEN,
             title: 'Added to the queue',
@@ -215,7 +211,7 @@ exports.exec = async (Bastion, message, args) => {
 
 
     if (!message.guild.music.playing) {
-      startStreamDispatcher(message.guild, voiceConnection);
+      await startStreamDispatcher(message.guild, voiceConnection);
     }
 
     voiceConnection.on('error', Bastion.log.error);
@@ -253,8 +249,38 @@ exports.help = {
  * @param {VoiceConnection} connection the VoiceConnection of Bastion in this guild
  * @returns {void}
  */
-function startStreamDispatcher(guild, connection) {
-  if (!guild.music.songs[0] || connection.channel.members.size <= 1) {
+async function startStreamDispatcher(guild, connection) {
+  if (!guild.music.songs[0] && guild.music.autoPlay && connection.channel.members.size > 1) {
+    let songs = await guild.client.methods.makeBWAPIRequest('/google/youtube/topsongs/today');
+    let videoID = songs.getRandom();
+
+    let youtubeDLOptions = [
+      '--quiet',
+      '--ignore-errors',
+      '--simulate',
+      '--no-warnings',
+      '--format=bestaudio[protocol^=http]',
+      '--user-agent=BastionDiscordBot (https://bastionbot.org)',
+      '--referer=https://bastionbot.org',
+      '--youtube-skip-dash-manifest'
+    ];
+
+    let songInfo = await getSongInfo(`https://youtu.be/${videoID}`, youtubeDLOptions);
+
+    if (!songInfo) {
+      return guild.client.emit('error', '', guild.client.i18n.error(guild.language, 'notFound', 'result'), guild.music.textChannel);
+    }
+
+    guild.music.songs.push({
+      url: songInfo.url,
+      id: songInfo.id,
+      title: songInfo.title,
+      thumbnail: songInfo.thumbnail,
+      duration: songInfo.duration,
+      requester: guild.client.user.tag
+    });
+  }
+  else if (!guild.music.songs[0] || connection.channel.members.size <= 1) {
     if (guild.client.configurations.music && guild.client.configurations.music.status) {
       guild.client.user.setActivity(typeof guild.client.configurations.game.name === 'string' ? guild.client.configurations.game.name : guild.client.configurations.game.name.length ? guild.client.configurations.game.name[0] : null,
         {
@@ -266,7 +292,7 @@ function startStreamDispatcher(guild, connection) {
 
     let description;
     if (!guild.music.songs[0]) {
-      description = 'Exiting voice channel.';
+      description = 'Stopping playback.';
     }
     else {
       guild.music.songs = [];
@@ -280,7 +306,7 @@ function startStreamDispatcher(guild, connection) {
       }
     }).then(() => {
       guild.music.dispatcher.end();
-      guild.music.voiceChannel.leave();
+      if (guild.music.autoDisconnect) guild.music.voiceChannel.leave();
     }).catch(e => {
       guild.client.log.error(e);
     });
